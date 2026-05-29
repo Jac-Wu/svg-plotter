@@ -11,8 +11,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Nunito:300,400,700">
   <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css"
     integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
-</head>
-<link rel="stylesheet" href="https://api.tiles.mapbox.com/mapbox-gl-js/v0.53.1/mapbox-gl.css" />
+  <link rel="stylesheet" href="https://api.tiles.mapbox.com/mapbox-gl-js/v0.53.1/mapbox-gl.css" />
 </head>
 
 <body>
@@ -21,58 +20,69 @@
     <form id="convertForm" class="top-left panel full-height">
       <header class="panel__header">
         <div class="site-title">
-          <h1>SVG Plotter</h1>
-          <a href="https://github.com/LiamAttClarke/svg-plotter" target="_blank">source</a>
+          <h1 data-i18n="title">SVG Plotter</h1>
+          <div class="site-title__actions">
+            <a href="https://github.com/LiamAttClarke/svg-plotter" target="_blank" data-i18n="source">source</a>
+            <button type="button" id="langToggleButton" class="button lang-toggle">中文</button>
+          </div>
         </div>
-        <p class="site-info">Convert SVG files to GeoJSON</p>
-        <p class="site-info">By: <a href="https://atticus.dev/">atticus.dev</a></p>
+        <p class="site-info" data-i18n="description">Convert SVG files to GeoJSON</p>
+        <p class="site-info" data-i18n-author>By: <a href="https://atticus.dev/" target="_blank">atticus.dev</a></p>
       </header>
       <div class="panel__content">
         <label name="svgFile" class="input--image">
           <input id="svgFileInput" name="svgFile" type="file" accept=".svg" required />
-          <span class="placeholder">Click to select .svg file</span>
+          <span class="placeholder" data-i18n="selectFile">Click to select .svg file</span>
           <img id="svgPreviewImage" src="" />
         </label>
         <div class="input-group">
-          <label for="centerLatitudeInput">Center:</label>
+          <label for="centerLatitudeInput" data-i18n="center">Center:</label>
           <div class="row">
             <div>
               <input id="centerLatitudeInput" name="centerLatitude" type="number" value="43.761539" step="1" size="10"
                 required />
-              <p class="hint">Latitude</p>
+              <p class="hint" data-i18n="latitude">Latitude</p>
             </div>
             <div>
               <input id="centerLongitudeInput" name="centerLongitude" type="number" value="-79.411079" step="1"
                 size="10" required />
-              <p class="hint">Longitude</p>
+              <p class="hint" data-i18n="longitude">Longitude</p>
             </div>
           </div>
         </div>
         <div class="input-group">
-          <label for="widthInput">Width:</label>
+          <label for="widthInput" data-i18n="width">Width:</label>
           <input id="widthInput" name="width" type="number" value="1000000" step="1000" size="10" required />
-          <p class="hint">Metres</p>
+          <p class="hint" data-i18n="widthHint">Metres</p>
         </div>
         <div class="input-group">
-          <label for="bearingInput">Bearing:</label>
+          <label for="bearingInput" data-i18n="bearing">Bearing:</label>
           <input id="bearingInput" name="bearing" type="number" value="0" step="1" size="3">
-          <p class="hint">Angle in degrees to rotate geometry clockwise around its center.</p>
+          <p class="hint" data-i18n="bearingHint">Angle in degrees to rotate geometry clockwise around its center.</p>
         </div>
         <div class="input-group">
-          <label for="subdivideThresholdInput">Curve Subdivide Threshold:</label>
+          <label for="subdivideThresholdInput" data-i18n="subdivide">Curve Subdivide Threshold:</label>
           <input id="subdivideThresholdInput" name="subdivideThreshold" type="number" value="5" step="1" size="2"
             required />
-          <p class="hint">Angular threshold for subdividing curves. Smaller values will produce smoother curves.</p>
+          <p class="hint" data-i18n="subdivideHint">Angular threshold for subdividing curves. Smaller values will produce smoother curves.</p>
+        </div>
+        <div class="input-group drag-help">
+          <p class="hint">
+            <strong data-i18n="dragControls">Drag controls:</strong><br>
+            <span data-i18n="dragHelp1">Drag the dashed box to move the SVG.</span><br>
+            <span data-i18n="dragHelp2">Drag a corner handle to scale it.</span><br>
+            <span data-i18n="dragHelp3">Drag the round handle to rotate it.</span>
+          </p>
         </div>
       </div>
       <footer class="panel__footer">
         <div class="button-group">
           <button id="convertButton" class="button primary" type="submit">
             <i class="icon fas fa-cogs"></i>
-            Convert
+            <span data-i18n="convert">Convert</span>
           </button>
           <button class="button" id="downloadButton" disabled>
-            <i class="icon fas fa-file-download"></i>Download
+            <i class="icon fas fa-file-download"></i><span data-i18n="download">Download</span>
           </button>
         </div>
       </footer>

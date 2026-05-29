@@ -2,16 +2,123 @@
 const mapbox = require("mapbox-gl");
 const bbox = require("@turf/bbox").default;
 const FileSaver = require("file-saver");
-const { convertSVG } = require("../dist");
+const {
+    convertSVG,
+    DragHandler,
+    coordToMercator,
+    mercatorToCoord,
+} = require("../dist");
+
+const i18n = {
+    en: {
+        title: "SVG Plotter",
+        source: "source",
+        description: "Convert SVG files to GeoJSON",
+        selectFile: "Click to select .svg file",
+        center: "Center:",
+        latitude: "Latitude",
+        longitude: "Longitude",
+        width: "Width:",
+        widthHint: "Metres",
+        bearing: "Bearing:",
+        bearingHint: "Angle in degrees to rotate geometry clockwise around its center.",
+        subdivide: "Curve Subdivide Threshold:",
+        subdivideHint: "Angular threshold for subdividing curves. Smaller values will produce smoother curves.",
+        dragControls: "Drag controls:",
+        dragHelp1: "Drag the dashed box to move the SVG.",
+        dragHelp2: "Drag a corner handle to scale it.",
+        dragHelp3: "Drag the round handle to rotate it.",
+        convert: "Convert",
+        download: "Download",
+        convertFail: "Failed to convert SVG. See logs for more detail.",
+    },
+    zh: {
+        title: "SVG 绘图器",
+        source: "源码",
+        description: "将 SVG 文件转换为 GeoJSON",
+        selectFile: "点击选择 .svg 文件",
+        center: "中心点:",
+        latitude: "纬度",
+        longitude: "经度",
+        width: "宽度:",
+        widthHint: "米",
+        bearing: "方位角:",
+        bearingHint: "围绕中心点顺时针旋转几何体的角度(度)。",
+        subdivide: "曲线细分阈值:",
+        subdivideHint: "曲线细分的角度阈值。值越小,曲线越平滑。",
+        dragControls: "拖拽控制:",
+        dragHelp1: "拖动虚线框来移动 SVG。",
+        dragHelp2: "拖动角落手柄来缩放。",
+        dragHelp3: "拖动圆形手柄来旋转。",
+        convert: "转换",
+        download: "下载",
+        convertFail: "SVG 转换失败,请查看日志了解详情。",
+    },
+};
+
+let currentLang = navigator.language.startsWith("zh") ? "zh" : "en";
+
+function applyLanguage(lang) {
+    currentLang = lang;
+    document.documentElement.lang = lang;
+    const t = i18n[lang];
+    document.querySelectorAll("[data-i18n]").forEach((el) => {
+        const key = el.getAttribute("data-i18n");
+        if (t[key] !== undefined) {
+            el.textContent = t[key];
+        }
+    });
+    const authorEl = document.querySelector("[data-i18n-author]");
+    if (authorEl) {
+        const link = authorEl.querySelector("a");
+        if (link) {
+            const linkHref = link.href;
+            const linkText = link.textContent;
+            authorEl.textContent = t.author;
+            const newLink = document.createElement("a");
+            newLink.href = linkHref;
+            newLink.target = "_blank";
+            newLink.textContent = linkText;
+            authorEl.appendChild(newLink);
+        }
+    }
+    const toggleBtn = document.getElementById("langToggleButton");
+    if (toggleBtn) {
+        toggleBtn.textContent = lang === "en" ? "中文" : "EN";
+    }
+    localStorage.setItem("lang", lang);
+}
 
 const svgPreviewImage = document.getElementById("svgPreviewImage");
 const convertForm = document.getElementById("convertForm");
 const svgFileInput = document.getElementById("svgFileInput");
 const convertButton = document.getElementById("convertButton");
 const downloadButton = document.getElementById("downloadButton");
+const centerLatInput = document.getElementById("centerLatitudeInput");
+const centerLonInput = document.getElementById("centerLongitudeInput");
+const widthInput = document.getElementById("widthInput");
+const bearingInput = document.getElementById("bearingInput");
+const langToggleButton = document.getElementById("langToggleButton");
+
+const savedLang = localStorage.getItem("lang");
+if (savedLang) {
+    currentLang = savedLang;
+}
+applyLanguage(currentLang);
+
+langToggleButton.addEventListener("click", () => {
+    applyLanguage(currentLang === "en" ? "zh" : "en");
+});
+
+const EMPTY_FEATURE_COLLECTION = {
+    type: "FeatureCollection",
+    features: [],
+};
 
 let svgInput = null;
 let geojsonOutput = null;
+let currentOptions = null;
+let dragHandler = null;
 
 // Setup map preview
 // eslint-disable-next-line max-len
@@ -25,10 +132,7 @@ const map = new mapbox.Map({
 map.on("load", () => {
     map.addSource("svg", {
         "type": "geojson",
-        "data": {
-            "type": "FeatureCollection",
-            "features": [],
-        },
+        "data": EMPTY_FEATURE_COLLECTION,
     });
     map.addLayer({
         "id": "svg-point",
@@ -58,6 +162,78 @@ map.on("load", () => {
     });
 });
 
+function getConvertOptions() {
+    const formData = new FormData(convertForm);
+    return {
+        center: {
+            latitude: parseFloat(formData.get("centerLatitude")),
+            longitude: parseFloat(formData.get("centerLongitude")),
+        },
+        width: parseFloat(formData.get("width")),
+        bearing: parseFloat(formData.get("bearing")),
+        subdivideThreshold: parseFloat(formData.get("subdivideThreshold")),
+    };
+}
+
+function renderGeoJSON(geojson) {
+    map.getSource("svg").setData(geojson);
+}
+
+function clearGeoJSON() {
+    renderGeoJSON(EMPTY_FEATURE_COLLECTION);
+}
+
+const mapAdapter = {
+    pixelToMercator(pixel) {
+        const lngLat = map.unproject([pixel.x, pixel.y]);
+        return coordToMercator(lngLat.lng, lngLat.lat);
+    },
+    mercatorToPixel(mercator) {
+        const coord = mercatorToCoord(mercator);
+        const point = map.project(coord);
+        return { x: point.x, y: point.y };
+    },
+    renderGeoJSON,
+    clearGeoJSON,
+    pixelToCoord(pixel) {
+        const lngLat = map.unproject([pixel.x, pixel.y]);
+        return [lngLat.lng, lngLat.lat];
+    },
+    coordToPixel(coord) {
+        const point = map.project(coord);
+        return { x: point.x, y: point.y };
+    },
+    getContainer() {
+        return map.getContainer();
+    },
+};
+
+function updateFormFromState(state) {
+    centerLatInput.value = state.center.latitude.toFixed(6);
+    centerLonInput.value = state.center.longitude.toFixed(6);
+    widthInput.value = Math.round(state.width);
+    bearingInput.value = state.bearing.toFixed(2);
+}
+
+function startDragInteraction(geojson, options) {
+    if (dragHandler) dragHandler.destroyFully();
+    dragHandler = new DragHandler();
+    dragHandler.start(geojson, options, mapAdapter, (state) => {
+        geojsonOutput = dragHandler.getGeoJSON();
+        currentOptions = {
+            ...currentOptions,
+            center: state.center,
+            width: state.width,
+            bearing: state.bearing,
+        };
+        updateFormFromState(state);
+    });
+}
+
+map.on("move", () => {
+    if (dragHandler) dragHandler.refresh();
+});
+
 svgFileInput.addEventListener("change", (event) => {
     if (event.target.files.length) {
         const fileReader = new FileReader();
@@ -72,28 +248,22 @@ svgFileInput.addEventListener("change", (event) => {
 
 convertButton.addEventListener("click", (event) => {
     event.preventDefault();
-    const formData = new FormData(convertForm);
+    const options = getConvertOptions();
     try {
-        const { geojson, errors } = convertSVG(svgInput, {
-            center: {
-                latitude: parseFloat(formData.get("centerLatitude")),
-                longitude: parseFloat(formData.get("centerLongitude")),
-            },
-            width: parseFloat(formData.get("width")),
-            bearing: parseFloat(formData.get("bearing")),
-            subdivideThreshold: parseFloat(formData.get("subdivideThreshold")),
-        });
+        const { geojson, errors } = convertSVG(svgInput, options);
         geojsonOutput = geojson;
+        currentOptions = options;
         errors.forEach((e) => console.warn(e));
         downloadButton.removeAttribute("disabled");
-        map.getSource("svg").setData(geojsonOutput);
+        renderGeoJSON(geojsonOutput);
+        startDragInteraction(geojsonOutput, currentOptions);
         map.fitBounds(bbox(geojsonOutput), {
             padding: 100,
             // Offsetting to righ to accomodate floating control panel
             offset: [100, 0],
         });
     } catch (e) {
-        alert("Failed to convert SVG. See logs for more detail.");
+        alert(i18n[currentLang].convertFail);
         console.error(e);
     }
 });
@@ -111,7 +281,7 @@ downloadButton.addEventListener("click", (event) => {
     }
 });
 
-},{"../dist":4,"@turf/bbox":15,"file-saver":18,"mapbox-gl":19}],2:[function(require,module,exports){
+},{"../dist":6,"@turf/bbox":17,"file-saver":20,"mapbox-gl":21}],2:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var Vector2 = (function () {
@@ -194,7 +364,361 @@ var __assign = (this && this.__assign) || function () {
     return __assign.apply(this, arguments);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.convertSVG = exports.getSVGMetadata = void 0;
+exports.DragHandler = void 0;
+var geo_transform_1 = require("./geo-transform");
+var HANDLE_SIZE = 10;
+var ROTATION_HANDLE_OFFSET = 30;
+var DragHandler = (function () {
+    function DragHandler() {
+        this.dragMode = "none";
+        this.dragStartPixel = null;
+        this.dragStartMercator = null;
+        this.dragStartState = null;
+        this.dragStartGeoJSON = null;
+        this.handles = null;
+        this.onStateChange = null;
+        this._cleanupEvents = null;
+    }
+    DragHandler.prototype.start = function (geojson, options, mapAdapter, onStateChange) {
+        this.currentGeoJSON = geojson;
+        this.state = (0, geo_transform_1.createTransformState)(options);
+        this.mapAdapter = mapAdapter;
+        this.onStateChange = onStateChange || null;
+        this.drawHandles();
+        this.attachEvents();
+    };
+    DragHandler.prototype.getState = function () {
+        return this.state;
+    };
+    DragHandler.prototype.getGeoJSON = function () {
+        return this.currentGeoJSON;
+    };
+    DragHandler.prototype.destroy = function () {
+        this.removeHandles();
+        this.dragMode = "none";
+        this.dragStartPixel = null;
+        this.dragStartMercator = null;
+        this.dragStartState = null;
+        this.dragStartGeoJSON = null;
+    };
+    DragHandler.prototype.refresh = function () {
+        this.refreshHandles();
+    };
+    DragHandler.prototype.drawHandles = function () {
+        this.removeHandles();
+        var container = this.mapAdapter.getContainer();
+        var bbox = (0, geo_transform_1.getGeoJSONBBox)(this.currentGeoJSON);
+        var tl = this.mapAdapter.coordToPixel([bbox.minLon, bbox.maxLat]);
+        var br = this.mapAdapter.coordToPixel([bbox.maxLon, bbox.minLat]);
+        var tr = { x: br.x, y: tl.y };
+        var bl = { x: tl.x, y: br.y };
+        var midTop = { x: (tl.x + tr.x) / 2, y: tl.y };
+        var bboxEl = document.createElement("div");
+        bboxEl.style.cssText = "\n            position: absolute;\n            left: ".concat(tl.x, "px; top: ").concat(tl.y, "px;\n            width: ").concat(br.x - tl.x, "px; height: ").concat(br.y - tl.y, "px;\n            border: 1.5px dashed rgba(85, 172, 238, 0.8);\n            cursor: move;\n            z-index: 10;\n            pointer-events: auto;\n        ");
+        container.appendChild(bboxEl);
+        var rotLineEl = document.createElement("div");
+        rotLineEl.style.cssText = "\n            position: absolute;\n            left: ".concat(midTop.x, "px; top: ").concat(midTop.y - ROTATION_HANDLE_OFFSET, "px;\n            width: 1px; height: ").concat(ROTATION_HANDLE_OFFSET, "px;\n            background: rgba(85, 172, 238, 0.6);\n            z-index: 11;\n            pointer-events: none;\n        ");
+        container.appendChild(rotLineEl);
+        var rotHandleEl = document.createElement("div");
+        rotHandleEl.style.cssText = "\n            position: absolute;\n            left: ".concat(midTop.x - HANDLE_SIZE / 2, "px;\n            top: ").concat(midTop.y - ROTATION_HANDLE_OFFSET - HANDLE_SIZE / 2, "px;\n            width: ").concat(HANDLE_SIZE, "px; height: ").concat(HANDLE_SIZE, "px;\n            border-radius: 50%;\n            background: #55acee;\n            border: 2px solid white;\n            cursor: grab;\n            z-index: 12;\n            pointer-events: auto;\n        ");
+        container.appendChild(rotHandleEl);
+        var cornerPositions = [tl, tr, bl, br];
+        var corners = cornerPositions.map(function (pos, i) {
+            var el = document.createElement("div");
+            var cursors = ["nw-resize", "ne-resize", "sw-resize", "se-resize"];
+            el.style.cssText = "\n                    position: absolute;\n                    left: ".concat(pos.x - HANDLE_SIZE / 2, "px; top: ").concat(pos.y - HANDLE_SIZE / 2, "px;\n                    width: ").concat(HANDLE_SIZE, "px; height: ").concat(HANDLE_SIZE, "px;\n                    background: #55acee;\n                    border: 2px solid white;\n                    cursor: ").concat(cursors[i], ";\n                    z-index: 12;\n                    pointer-events: auto;\n                ");
+            container.appendChild(el);
+            return el;
+        });
+        this.handles = {
+            bbox: bboxEl,
+            corners: corners,
+            rotationLine: rotLineEl,
+            rotationHandle: rotHandleEl,
+        };
+        this.attachHandleEvents();
+    };
+    DragHandler.prototype.removeHandles = function () {
+        if (!this.handles)
+            return;
+        this.handles.bbox.remove();
+        this.handles.corners.forEach(function (c) { return c.remove(); });
+        this.handles.rotationLine.remove();
+        this.handles.rotationHandle.remove();
+        this.handles = null;
+    };
+    DragHandler.prototype.refreshHandles = function () {
+        this.drawHandles();
+    };
+    DragHandler.prototype.attachHandleEvents = function () {
+        var _this = this;
+        if (!this.handles)
+            return;
+        var container = this.mapAdapter.getContainer();
+        var onDown = function (mode) { return function (e) {
+            e.stopPropagation();
+            e.preventDefault();
+            _this.dragMode = mode;
+            _this.dragStartPixel = { x: e.clientX, y: e.clientY };
+            _this.dragStartMercator = _this.mapAdapter.pixelToMercator({
+                x: e.clientX - container.getBoundingClientRect().left,
+                y: e.clientY - container.getBoundingClientRect().top,
+            });
+            _this.dragStartState = __assign({}, _this.state);
+            _this.dragStartGeoJSON = _this.currentGeoJSON;
+        }; };
+        this.handles.bbox.addEventListener("mousedown", onDown("translate"));
+        this.handles.corners[0].addEventListener("mousedown", onDown("scale-tl"));
+        this.handles.corners[1].addEventListener("mousedown", onDown("scale-tr"));
+        this.handles.corners[2].addEventListener("mousedown", onDown("scale-bl"));
+        this.handles.corners[3].addEventListener("mousedown", onDown("scale-br"));
+        this.handles.rotationHandle.addEventListener("mousedown", onDown("rotate"));
+    };
+    DragHandler.prototype.attachEvents = function () {
+        var _this = this;
+        var container = this.mapAdapter.getContainer();
+        var onMove = function (e) {
+            if (_this.dragMode === "none" || !_this.dragStartPixel || !_this.dragStartMercator
+                || !_this.dragStartState || !_this.dragStartGeoJSON)
+                return;
+            var containerRect = container.getBoundingClientRect();
+            var currentMercator = _this.mapAdapter.pixelToMercator({
+                x: e.clientX - containerRect.left,
+                y: e.clientY - containerRect.top,
+            });
+            var result;
+            if (_this.dragMode === "translate") {
+                var delta = currentMercator.subtract(_this.dragStartMercator);
+                result = (0, geo_transform_1.translateGeoJSON)(_this.dragStartGeoJSON, _this.dragStartState, delta);
+            }
+            else if (_this.dragMode === "scale-tl" || _this.dragMode === "scale-tr"
+                || _this.dragMode === "scale-bl" || _this.dragMode === "scale-br"
+                || _this.dragMode === "scale") {
+                var startDist = _this.dragStartMercator
+                    .subtract(_this.dragStartState.centerMercator)
+                    .magnitude();
+                var currentDist = currentMercator
+                    .subtract(_this.dragStartState.centerMercator)
+                    .magnitude();
+                var scaleFactor = startDist > 0 ? currentDist / startDist : 1;
+                result = (0, geo_transform_1.scaleGeoJSON)(_this.dragStartGeoJSON, _this.dragStartState, scaleFactor);
+            }
+            else if (_this.dragMode === "rotate") {
+                var startAngle = Math.atan2(_this.dragStartMercator.y - _this.dragStartState.centerMercator.y, _this.dragStartMercator.x - _this.dragStartState.centerMercator.x);
+                var currentAngle = Math.atan2(currentMercator.y - _this.dragStartState.centerMercator.y, currentMercator.x - _this.dragStartState.centerMercator.x);
+                var deltaRad = currentAngle - startAngle;
+                var deltaDeg = -deltaRad * 180 / Math.PI;
+                result = (0, geo_transform_1.rotateGeoJSON)(_this.dragStartGeoJSON, _this.dragStartState, deltaDeg);
+            }
+            else {
+                return;
+            }
+            _this.currentGeoJSON = result.geojson;
+            _this.state = result.state;
+            _this.mapAdapter.renderGeoJSON(_this.currentGeoJSON);
+            _this.refreshHandles();
+            if (_this.onStateChange)
+                _this.onStateChange(_this.state);
+        };
+        var onUp = function () {
+            _this.dragMode = "none";
+            _this.dragStartPixel = null;
+            _this.dragStartMercator = null;
+            _this.dragStartState = null;
+            _this.dragStartGeoJSON = null;
+        };
+        container.addEventListener("mousemove", onMove);
+        container.addEventListener("mouseup", onUp);
+        this._cleanupEvents = function () {
+            container.removeEventListener("mousemove", onMove);
+            container.removeEventListener("mouseup", onUp);
+        };
+    };
+    DragHandler.prototype.destroyFully = function () {
+        this.destroy();
+        if (this._cleanupEvents) {
+            this._cleanupEvents();
+            this._cleanupEvents = null;
+        }
+    };
+    return DragHandler;
+}());
+exports.DragHandler = DragHandler;
+
+},{"./geo-transform":5}],5:[function(require,module,exports){
+"use strict";
+var __assign = (this && this.__assign) || function () {
+    __assign = Object.assign || function(t) {
+        for (var s, i = 1, n = arguments.length; i < n; i++) {
+            s = arguments[i];
+            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p))
+                t[p] = s[p];
+        }
+        return t;
+    };
+    return __assign.apply(this, arguments);
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.getGeoJSONBBox = exports.rotateGeoJSON = exports.scaleGeoJSON = exports.translateGeoJSON = exports.mercatorToCoord = exports.coordToMercator = exports.createTransformState = void 0;
+var projections_1 = require("projections");
+var Vector2_1 = require("./Vector2");
+var math_utils_1 = require("./math-utils");
+var constants_1 = require("./constants");
+function createTransformState(options) {
+    var center = options.center || { longitude: 0, latitude: 0 };
+    var width = options.width || 1000e3;
+    var bearing = options.bearing || 0;
+    var centerMercator = coordToMercator(center.longitude, center.latitude);
+    return { center: center, width: width, bearing: bearing, centerMercator: centerMercator, scale: width / constants_1.EARTH_CIRCUMFERENCE };
+}
+exports.createTransformState = createTransformState;
+function coordToMercator(lon, lat) {
+    var projected = (0, projections_1.mercator)({ lon: lon, lat: lat });
+    return new Vector2_1.default(projected.x, projected.y);
+}
+exports.coordToMercator = coordToMercator;
+function mercatorToCoord(v) {
+    var coord = (0, projections_1.mercator)({ x: (0, math_utils_1.clamp)(v.x, 0, 1), y: (0, math_utils_1.clamp)(v.y, 0, 1) });
+    return [coord.lon, coord.lat];
+}
+exports.mercatorToCoord = mercatorToCoord;
+function transformCoordinate(coord, fn) {
+    var m = coordToMercator(coord[0], coord[1]);
+    var transformed = fn(m);
+    return mercatorToCoord(transformed);
+}
+function transformCoordinates(coords, fn) {
+    return coords.map(function (c) { return transformCoordinate(c, fn); });
+}
+function transformGeometry(geometry, fn) {
+    switch (geometry.type) {
+        case "Point":
+            return { type: "Point", coordinates: transformCoordinate(geometry.coordinates, fn) };
+        case "LineString":
+        case "MultiPoint":
+            return { type: geometry.type, coordinates: transformCoordinates(geometry.coordinates, fn) };
+        case "Polygon":
+        case "MultiLineString":
+            return {
+                type: geometry.type,
+                coordinates: geometry.coordinates.map(function (ring) { return transformCoordinates(ring, fn); }),
+            };
+        case "MultiPolygon":
+            return {
+                type: "MultiPolygon",
+                coordinates: geometry.coordinates.map(function (polygon) {
+                    return polygon.map(function (ring) { return transformCoordinates(ring, fn); });
+                }),
+            };
+        default:
+            return geometry;
+    }
+}
+function transformFeature(feature, fn) {
+    return {
+        type: "Feature",
+        geometry: feature.geometry ? transformGeometry(feature.geometry, fn) : null,
+        properties: feature.properties,
+        id: feature.id,
+    };
+}
+function transformFeatureCollection(geojson, fn) {
+    return {
+        type: "FeatureCollection",
+        features: geojson.features.map(function (f) { return transformFeature(f, fn); }),
+    };
+}
+function translateGeoJSON(geojson, state, deltaMercator) {
+    var newCenterMercator = state.centerMercator.add(deltaMercator);
+    var newCenterCoord = mercatorToCoord(newCenterMercator);
+    var newCenter = { longitude: newCenterCoord[0], latitude: newCenterCoord[1] };
+    var newState = __assign(__assign({}, state), { center: newCenter, centerMercator: newCenterMercator });
+    var result = transformFeatureCollection(geojson, function (m) { return m.add(deltaMercator); });
+    return { geojson: result, state: newState };
+}
+exports.translateGeoJSON = translateGeoJSON;
+function scaleGeoJSON(geojson, state, scaleFactor) {
+    var newScale = state.scale * scaleFactor;
+    var newWidth = newScale * constants_1.EARTH_CIRCUMFERENCE;
+    var newState = __assign(__assign({}, state), { width: newWidth, scale: newScale });
+    var center = state.centerMercator;
+    var result = transformFeatureCollection(geojson, function (m) {
+        return center.add(m.subtract(center).multiplyByScalar(scaleFactor));
+    });
+    return { geojson: result, state: newState };
+}
+exports.scaleGeoJSON = scaleGeoJSON;
+function rotateGeoJSON(geojson, state, deltaBearingDeg) {
+    var newBearing = state.bearing + deltaBearingDeg;
+    var newState = __assign(__assign({}, state), { bearing: newBearing });
+    var center = state.centerMercator;
+    var angleRad = (0, math_utils_1.toRadians)(deltaBearingDeg);
+    var cos = Math.cos(angleRad);
+    var sin = Math.sin(angleRad);
+    var result = transformFeatureCollection(geojson, function (m) {
+        var offset = m.subtract(center);
+        return center.add(new Vector2_1.default(offset.x * cos - offset.y * sin, offset.x * sin + offset.y * cos));
+    });
+    return { geojson: result, state: newState };
+}
+exports.rotateGeoJSON = rotateGeoJSON;
+function getGeoJSONBBox(geojson) {
+    var minLon = Infinity, minLat = Infinity;
+    var maxLon = -Infinity, maxLat = -Infinity;
+    function visitCoord(c) {
+        if (c[0] < minLon)
+            minLon = c[0];
+        if (c[0] > maxLon)
+            maxLon = c[0];
+        if (c[1] < minLat)
+            minLat = c[1];
+        if (c[1] > maxLat)
+            maxLat = c[1];
+    }
+    function visitCoords(coords) {
+        coords.forEach(visitCoord);
+    }
+    function visitGeometry(geometry) {
+        switch (geometry.type) {
+            case "Point":
+                visitCoord(geometry.coordinates);
+                break;
+            case "LineString":
+            case "MultiPoint":
+                visitCoords(geometry.coordinates);
+                break;
+            case "Polygon":
+            case "MultiLineString":
+                geometry.coordinates.forEach(visitCoords);
+                break;
+            case "MultiPolygon":
+                geometry.coordinates.forEach(function (polygon) { return polygon.forEach(visitCoords); });
+                break;
+        }
+    }
+    geojson.features.forEach(function (f) {
+        if (f.geometry)
+            visitGeometry(f.geometry);
+    });
+    return { minLon: minLon, minLat: minLat, maxLon: maxLon, maxLat: maxLat };
+}
+exports.getGeoJSONBBox = getGeoJSONBBox;
+
+},{"./Vector2":2,"./constants":3,"./math-utils":7,"projections":29}],6:[function(require,module,exports){
+"use strict";
+var __assign = (this && this.__assign) || function () {
+    __assign = Object.assign || function(t) {
+        for (var s, i = 1, n = arguments.length; i < n; i++) {
+            s = arguments[i];
+            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p))
+                t[p] = s[p];
+        }
+        return t;
+    };
+    return __assign.apply(this, arguments);
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.DragHandler = exports.mercatorToCoord = exports.coordToMercator = exports.getGeoJSONBBox = exports.rotateGeoJSON = exports.scaleGeoJSON = exports.translateGeoJSON = exports.createTransformState = exports.convertSVG = exports.getSVGMetadata = void 0;
 var svgson_1 = require("svgson");
 var Transformers = require("./transformers");
 var DEFAULT_CONVERT_OPTIONS = {
@@ -272,8 +796,18 @@ function convertSVG(input, options) {
     };
 }
 exports.convertSVG = convertSVG;
+var geo_transform_1 = require("./geo-transform");
+Object.defineProperty(exports, "createTransformState", { enumerable: true, get: function () { return geo_transform_1.createTransformState; } });
+Object.defineProperty(exports, "translateGeoJSON", { enumerable: true, get: function () { return geo_transform_1.translateGeoJSON; } });
+Object.defineProperty(exports, "scaleGeoJSON", { enumerable: true, get: function () { return geo_transform_1.scaleGeoJSON; } });
+Object.defineProperty(exports, "rotateGeoJSON", { enumerable: true, get: function () { return geo_transform_1.rotateGeoJSON; } });
+Object.defineProperty(exports, "getGeoJSONBBox", { enumerable: true, get: function () { return geo_transform_1.getGeoJSONBBox; } });
+Object.defineProperty(exports, "coordToMercator", { enumerable: true, get: function () { return geo_transform_1.coordToMercator; } });
+Object.defineProperty(exports, "mercatorToCoord", { enumerable: true, get: function () { return geo_transform_1.mercatorToCoord; } });
+var drag_handler_1 = require("./drag-handler");
+Object.defineProperty(exports, "DragHandler", { enumerable: true, get: function () { return drag_handler_1.DragHandler; } });
 
-},{"./transformers":8,"svgson":36}],5:[function(require,module,exports){
+},{"./drag-handler":4,"./geo-transform":5,"./transformers":10,"svgson":38}],7:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.drawCurve = exports.pointOnEllipticalArc = exports.pointOnQuadraticBezierCurve = exports.pointOnCubicBezierCurve = exports.pointOnEllipse = exports.pointOnLine = exports.quadraticBezier = exports.cubicBezier = exports.haversineDistance = exports.toDegrees = exports.toRadians = exports.lerp = exports.clamp = void 0;
@@ -424,7 +958,7 @@ function drawCurve(curve, subdivideThreshold, start, end) {
 }
 exports.drawCurve = drawCurve;
 
-},{"./Vector2":2,"./constants":3}],6:[function(require,module,exports){
+},{"./Vector2":2,"./constants":3}],8:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var utils_1 = require("../utils");
@@ -459,7 +993,7 @@ var ellipseTransformer = function (input, svgMeta, options) {
 };
 exports.default = ellipseTransformer;
 
-},{"../Vector2":2,"../math-utils":5,"../utils":14}],7:[function(require,module,exports){
+},{"../Vector2":2,"../math-utils":7,"../utils":16}],9:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var svgTransformParser = require("ya-svg-transform");
@@ -493,7 +1027,7 @@ var groupTransformer = function (node) {
 };
 exports.default = groupTransformer;
 
-},{"ya-svg-transform":37}],8:[function(require,module,exports){
+},{"ya-svg-transform":39}],10:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.rect = exports.polyline = exports.polygon = exports.path = exports.line = exports.group = exports.ellipse = void 0;
@@ -512,7 +1046,7 @@ Object.defineProperty(exports, "polyline", { enumerable: true, get: function () 
 var rect_1 = require("./rect");
 Object.defineProperty(exports, "rect", { enumerable: true, get: function () { return rect_1.default; } });
 
-},{"./ellipse":6,"./group":7,"./line":9,"./path":10,"./polygon":11,"./polyline":12,"./rect":13}],9:[function(require,module,exports){
+},{"./ellipse":8,"./group":9,"./line":11,"./path":12,"./polygon":13,"./polyline":14,"./rect":15}],11:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var utils_1 = require("../utils");
@@ -536,7 +1070,7 @@ var lineTransformer = function (input, svgMeta, options) {
 };
 exports.default = lineTransformer;
 
-},{"../Vector2":2,"../utils":14}],10:[function(require,module,exports){
+},{"../Vector2":2,"../utils":16}],12:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var svgPathParser = require("svg-path-parser");
@@ -675,7 +1209,7 @@ var pathTransformer = function (input, svgMeta, options) {
 };
 exports.default = pathTransformer;
 
-},{"../Vector2":2,"../math-utils":5,"../utils":14,"svg-path-parser":34}],11:[function(require,module,exports){
+},{"../Vector2":2,"../math-utils":7,"../utils":16,"svg-path-parser":36}],13:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var utils_1 = require("../utils");
@@ -698,7 +1232,7 @@ var polygonTransformer = function (node, svgMeta, options) {
 };
 exports.default = polygonTransformer;
 
-},{"../utils":14}],12:[function(require,module,exports){
+},{"../utils":16}],14:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var utils_1 = require("../utils");
@@ -733,7 +1267,7 @@ var polylineTransformer = function (input, svgMeta, options) {
 };
 exports.default = polylineTransformer;
 
-},{"../utils":14}],13:[function(require,module,exports){
+},{"../utils":16}],15:[function(require,module,exports){
 "use strict";
 var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
     if (pack || arguments.length === 2) for (var i = 0, l = from.length, ar; i < l; i++) {
@@ -789,7 +1323,7 @@ var rectTransformer = function (input, svgMeta, options) {
 };
 exports.default = rectTransformer;
 
-},{"../Vector2":2,"../math-utils":5,"../utils":14}],14:[function(require,module,exports){
+},{"../Vector2":2,"../math-utils":7,"../utils":16}],16:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.svgPointToCoordinate = exports.parseSVGPointsString = exports.createFeature = void 0;
@@ -847,7 +1381,7 @@ function svgPointToCoordinate(point, svgMeta, options, svgTransform) {
 }
 exports.svgPointToCoordinate = svgPointToCoordinate;
 
-},{"./Vector2":2,"./constants":3,"./math-utils":5,"projections":27,"ya-svg-transform":37}],15:[function(require,module,exports){
+},{"./Vector2":2,"./constants":3,"./math-utils":7,"projections":29,"ya-svg-transform":39}],17:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var meta_1 = require("@turf/meta");
@@ -886,7 +1420,7 @@ function bbox(geojson) {
 bbox["default"] = bbox;
 exports.default = bbox;
 
-},{"@turf/meta":17}],16:[function(require,module,exports){
+},{"@turf/meta":19}],18:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 /**
@@ -1612,7 +2146,7 @@ function validateId(id) {
 }
 exports.validateId = validateId;
 
-},{}],17:[function(require,module,exports){
+},{}],19:[function(require,module,exports){
 'use strict';
 
 Object.defineProperty(exports, '__esModule', { value: true });
@@ -3035,13 +3569,13 @@ exports.propReduce = propReduce;
 exports.segmentEach = segmentEach;
 exports.segmentReduce = segmentReduce;
 
-},{"@turf/helpers":16}],18:[function(require,module,exports){
+},{"@turf/helpers":18}],20:[function(require,module,exports){
 (function (global){(function (){
 (function(a,b){if("function"==typeof define&&define.amd)define([],b);else if("undefined"!=typeof exports)b();else{b(),a.FileSaver={exports:{}}.exports}})(this,function(){"use strict";function b(a,b){return"undefined"==typeof b?b={autoBom:!1}:"object"!=typeof b&&(console.warn("Deprecated: Expected third argument to be a object"),b={autoBom:!b}),b.autoBom&&/^\s*(?:text\/\S*|application\/xml|\S*\/\S*\+xml)\s*;.*charset\s*=\s*utf-8/i.test(a.type)?new Blob(["\uFEFF",a],{type:a.type}):a}function c(a,b,c){var d=new XMLHttpRequest;d.open("GET",a),d.responseType="blob",d.onload=function(){g(d.response,b,c)},d.onerror=function(){console.error("could not download file")},d.send()}function d(a){var b=new XMLHttpRequest;b.open("HEAD",a,!1);try{b.send()}catch(a){}return 200<=b.status&&299>=b.status}function e(a){try{a.dispatchEvent(new MouseEvent("click"))}catch(c){var b=document.createEvent("MouseEvents");b.initMouseEvent("click",!0,!0,window,0,0,0,80,20,!1,!1,!1,!1,0,null),a.dispatchEvent(b)}}var f="object"==typeof window&&window.window===window?window:"object"==typeof self&&self.self===self?self:"object"==typeof global&&global.global===global?global:void 0,a=f.navigator&&/Macintosh/.test(navigator.userAgent)&&/AppleWebKit/.test(navigator.userAgent)&&!/Safari/.test(navigator.userAgent),g=f.saveAs||("object"!=typeof window||window!==f?function(){}:"download"in HTMLAnchorElement.prototype&&!a?function(b,g,h){var i=f.URL||f.webkitURL,j=document.createElement("a");g=g||b.name||"download",j.download=g,j.rel="noopener","string"==typeof b?(j.href=b,j.origin===location.origin?e(j):d(j.href)?c(b,g,h):e(j,j.target="_blank")):(j.href=i.createObjectURL(b),setTimeout(function(){i.revokeObjectURL(j.href)},4E4),setTimeout(function(){e(j)},0))}:"msSaveOrOpenBlob"in navigator?function(f,g,h){if(g=g||f.name||"download","string"!=typeof f)navigator.msSaveOrOpenBlob(b(f,h),g);else if(d(f))c(f,g,h);else{var i=document.createElement("a");i.href=f,i.target="_blank",setTimeout(function(){e(i)})}}:function(b,d,e,g){if(g=g||open("","_blank"),g&&(g.document.title=g.document.body.innerText="downloading..."),"string"==typeof b)return c(b,d,e);var h="application/octet-stream"===b.type,i=/constructor/i.test(f.HTMLElement)||f.safari,j=/CriOS\/[\d]+/.test(navigator.userAgent);if((j||h&&i||a)&&"undefined"!=typeof FileReader){var k=new FileReader;k.onloadend=function(){var a=k.result;a=j?a:a.replace(/^data:[^;]*;/,"data:attachment/file;"),g?g.location.href=a:location=a,g=null},k.readAsDataURL(b)}else{var l=f.URL||f.webkitURL,m=l.createObjectURL(b);g?g.location=m:location.href=m,g=null,setTimeout(function(){l.revokeObjectURL(m)},4E4)}});f.saveAs=g.saveAs=g,"undefined"!=typeof module&&(module.exports=g)});
 
 
 }).call(this)}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],19:[function(require,module,exports){
+},{}],21:[function(require,module,exports){
 (function (process){(function (){
 /* Mapbox GL JS is Copyright © 2020 Mapbox and subject to the Mapbox Terms of Service ((https://www.mapbox.com/legal/tos/). */
 (function (global, factory) {
@@ -3094,7 +3628,7 @@ return mapboxgl$1;
 
 
 }).call(this)}).call(this,require('_process'))
-},{"_process":20}],20:[function(require,module,exports){
+},{"_process":22}],22:[function(require,module,exports){
 // shim for using process in browser
 var process = module.exports = {};
 
@@ -3280,7 +3814,7 @@ process.chdir = function (dir) {
 };
 process.umask = function() { return 0; };
 
-},{}],21:[function(require,module,exports){
+},{}],23:[function(require,module,exports){
 'use strict'
 
 const h = require('./helpers')
@@ -3306,7 +3840,7 @@ const braun = (point, opt) => {
 
 module.exports = braun
 
-},{"./helpers":26}],22:[function(require,module,exports){
+},{"./helpers":28}],24:[function(require,module,exports){
 'use strict'
 
 const h = require('./helpers')
@@ -3332,7 +3866,7 @@ const centralCylindrical = (point, opt) => {
 
 module.exports = centralCylindrical
 
-},{"./helpers":26}],23:[function(require,module,exports){
+},{"./helpers":28}],25:[function(require,module,exports){
 'use strict'
 
 const h = require('./helpers')
@@ -3358,7 +3892,7 @@ const equirectangular = (point, opt) => {
 
 module.exports = equirectangular
 
-},{"./helpers":26}],24:[function(require,module,exports){
+},{"./helpers":28}],26:[function(require,module,exports){
 'use strict'
 
 const h = require('./helpers')
@@ -3384,7 +3918,7 @@ const gallPeters = (point, opt) => {
 
 module.exports = gallPeters
 
-},{"./helpers":26}],25:[function(require,module,exports){
+},{"./helpers":28}],27:[function(require,module,exports){
 'use strict'
 
 const h = require('./helpers')
@@ -3410,7 +3944,7 @@ const gall = (point, opt) => {
 
 module.exports = gall
 
-},{"./helpers":26}],26:[function(require,module,exports){
+},{"./helpers":28}],28:[function(require,module,exports){
 'use strict'
 
 const rad = (deg) => deg*Math.PI/180
@@ -3442,7 +3976,7 @@ const addMeridian = (point, meridian) => {
 }
 
 module.exports = {rad, sin, cos, tan, deg, addMeridian, check, options}
-},{}],27:[function(require,module,exports){
+},{}],29:[function(require,module,exports){
 'use strict'
 
 module.exports = {
@@ -3459,7 +3993,7 @@ module.exports = {
 	wagner6: require('./wagner-6')
 }
 
-},{"./braun":21,"./central-cylindrical":22,"./equirectangular":23,"./gall":25,"./gall-peters":24,"./kavrayskiy-7":28,"./lambert":29,"./mercator":30,"./miller":31,"./sinusoidal":32,"./wagner-6":33}],28:[function(require,module,exports){
+},{"./braun":23,"./central-cylindrical":24,"./equirectangular":25,"./gall":27,"./gall-peters":26,"./kavrayskiy-7":30,"./lambert":31,"./mercator":32,"./miller":33,"./sinusoidal":34,"./wagner-6":35}],30:[function(require,module,exports){
 'use strict'
 
 const h = require('./helpers')
@@ -3486,7 +4020,7 @@ const kavrayskiy7 = (point, opt) => {
 
 module.exports = kavrayskiy7
 
-},{"./helpers":26}],29:[function(require,module,exports){
+},{"./helpers":28}],31:[function(require,module,exports){
 'use strict'
 
 const h = require('./helpers')
@@ -3512,7 +4046,7 @@ const lambert = (point, opt) => {
 
 module.exports = lambert
 
-},{"./helpers":26}],30:[function(require,module,exports){
+},{"./helpers":28}],32:[function(require,module,exports){
 'use strict'
 
 const h = require('./helpers')
@@ -3538,7 +4072,7 @@ const mercator = (point, opt) => {
 
 module.exports = mercator
 
-},{"./helpers":26}],31:[function(require,module,exports){
+},{"./helpers":28}],33:[function(require,module,exports){
 'use strict'
 
 const h = require('./helpers')
@@ -3565,7 +4099,7 @@ const miller = (point, opt) => {
 
 module.exports = miller
 
-},{"./helpers":26}],32:[function(require,module,exports){
+},{"./helpers":28}],34:[function(require,module,exports){
 'use strict'
 
 const h = require('./helpers')
@@ -3592,7 +4126,7 @@ const sinusoidal = (point, opt) => {
 
 module.exports = sinusoidal
 
-},{"./helpers":26}],33:[function(require,module,exports){
+},{"./helpers":28}],35:[function(require,module,exports){
 'use strict'
 
 const h = require('./helpers')
@@ -3619,7 +4153,7 @@ const wagner6 = (point, opt) => {
 
 module.exports = wagner6
 
-},{"./helpers":26,"./kavrayskiy-7":28}],34:[function(require,module,exports){
+},{"./helpers":28,"./kavrayskiy-7":30}],36:[function(require,module,exports){
 // v1.0 exported just the parser function. To maintain backwards compatibility,
 // we export additional named features as properties of that function.
 var parserFunction = require('./parser.js').parse;
@@ -3647,7 +4181,7 @@ function makeSVGPathCommandsAbsolute(commands) {
 	return commands;
 }
 
-},{"./parser.js":35}],35:[function(require,module,exports){
+},{"./parser.js":37}],37:[function(require,module,exports){
 /*
  * Generated by PEG.js 0.10.0.
  *
@@ -5717,7 +6251,7 @@ module.exports = {
   parse:       peg$parse
 };
 
-},{}],36:[function(require,module,exports){
+},{}],38:[function(require,module,exports){
 (function (global, factory) {
   typeof exports === 'object' && typeof module !== 'undefined' ? module.exports = factory() :
   typeof define === 'function' && define.amd ? define(factory) :
@@ -7021,7 +7555,7 @@ module.exports = {
 
 })));
 
-},{}],37:[function(require,module,exports){
+},{}],39:[function(require,module,exports){
 "use strict";
 ///<reference path="./index.d.ts" />
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -7039,7 +7573,7 @@ var transform_1 = require("./src/transform");
 exports.transform = transform_1.transform;
 exports.Transform = transform_1.Transform;
 
-},{"./parse-svg-transform":38,"./src/matrix":39,"./src/render":40,"./src/transform":41}],38:[function(require,module,exports){
+},{"./parse-svg-transform":40,"./src/matrix":41,"./src/render":42,"./src/transform":43}],40:[function(require,module,exports){
 /*
  * Generated by PEG.js 0.10.0.
  *
@@ -8577,7 +9111,7 @@ module.exports = {
   parse:       peg$parse
 };
 
-},{}],39:[function(require,module,exports){
+},{}],41:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var render_1 = require("./render");
@@ -8725,7 +9259,7 @@ function apply(x, pt) {
 }
 exports.apply = apply;
 
-},{"./render":40}],40:[function(require,module,exports){
+},{"./render":42}],42:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 function render(x) {
@@ -8762,7 +9296,7 @@ function _render(x) {
     return x.type + "(" + args.join(" ") + ")";
 }
 
-},{}],41:[function(require,module,exports){
+},{}],43:[function(require,module,exports){
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var parse_svg_transform_1 = require("../parse-svg-transform");
@@ -8807,4 +9341,4 @@ var Transform = /** @class */ (function () {
 }());
 exports.Transform = Transform;
 
-},{"../parse-svg-transform":38,"./matrix":39,"./render":40}]},{},[1]);
+},{"../parse-svg-transform":40,"./matrix":41,"./render":42}]},{},[1]);

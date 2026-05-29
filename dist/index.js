@@ -11,7 +11,7 @@ var __assign = (this && this.__assign) || function () {
     return __assign.apply(this, arguments);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.convertSVG = exports.getSVGMetadata = void 0;
+exports.DragHandler = exports.mercatorToCoord = exports.coordToMercator = exports.getGeoJSONBBox = exports.rotateGeoJSON = exports.scaleGeoJSON = exports.translateGeoJSON = exports.createTransformState = exports.convertSVG = exports.getSVGMetadata = void 0;
 var svgson_1 = require("svgson");
 var Transformers = require("./transformers");
 var DEFAULT_CONVERT_OPTIONS = {
@@ -89,4 +89,14 @@ function convertSVG(input, options) {
     };
 }
 exports.convertSVG = convertSVG;
+var geo_transform_1 = require("./geo-transform");
+Object.defineProperty(exports, "createTransformState", { enumerable: true, get: function () { return geo_transform_1.createTransformState; } });
+Object.defineProperty(exports, "translateGeoJSON", { enumerable: true, get: function () { return geo_transform_1.translateGeoJSON; } });
+Object.defineProperty(exports, "scaleGeoJSON", { enumerable: true, get: function () { return geo_transform_1.scaleGeoJSON; } });
+Object.defineProperty(exports, "rotateGeoJSON", { enumerable: true, get: function () { return geo_transform_1.rotateGeoJSON; } });
+Object.defineProperty(exports, "getGeoJSONBBox", { enumerable: true, get: function () { return geo_transform_1.getGeoJSONBBox; } });
+Object.defineProperty(exports, "coordToMercator", { enumerable: true, get: function () { return geo_transform_1.coordToMercator; } });
+Object.defineProperty(exports, "mercatorToCoord", { enumerable: true, get: function () { return geo_transform_1.mercatorToCoord; } });
+var drag_handler_1 = require("./drag-handler");
+Object.defineProperty(exports, "DragHandler", { enumerable: true, get: function () { return drag_handler_1.DragHandler; } });
 //# sourceMappingURL=index.js.map

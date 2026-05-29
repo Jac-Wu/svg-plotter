@@ -96,3 +96,20 @@ export function convertSVG(
         errors,
     };
 }
+
+// Re-export transform and drag modules
+export {
+    TransformState,
+    GeoJSONTransformResult,
+    createTransformState,
+    translateGeoJSON,
+    scaleGeoJSON,
+    rotateGeoJSON,
+    getGeoJSONBBox,
+    coordToMercator,
+    mercatorToCoord,
+} from "./geo-transform";
+
+export { MapAdapter, MapPixel } from "./map-adapter";
+
+export { DragHandler } from "./drag-handler";

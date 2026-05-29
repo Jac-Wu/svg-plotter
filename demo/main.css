@@ -157,6 +157,30 @@ input:focus {
   font-weight: normal;
 }
 
+.site-title__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lang-toggle {
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  font-weight: bold;
+  background-color: #fff;
+  border: solid 1px #CCC;
+  border-radius: 4px;
+  cursor: pointer;
+  min-width: 44px;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.lang-toggle:hover {
+  background-color: #55acee;
+  border-color: #4f99d3;
+  color: white;
+}
+
 .site-info {
   margin-top: 8px;
   margin-bottom: 0;
@@ -169,6 +193,13 @@ input:focus {
 
 .input-group:last-of-type {
   border-bottom: 0;
+}
+
+.input-group.drag-help {
+  padding: 8px;
+  background: rgba(85, 172, 238, 0.1);
+  border: 0;
+  border-radius: 5px;
 }
 
 .input-group label {
@@ -185,6 +216,11 @@ input:focus {
   margin-top: 8px;
   font-size: 0.8rem;
   color: #666;
+}
+
+.input-group.drag-help .hint {
+  margin-top: 0;
+  line-height: 1.6;
 }
 
 .input-group .row {
